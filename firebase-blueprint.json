@@ -1,0 +1,91 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile containing identity, role, and verification data.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "handle": { "type": "string", "description": "Unique username" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "vice_admin", "moderator", "editor", "client"] },
+        "badge": { "type": "string", "enum": ["gold", "silver", "purple", "blue", "green", "none"] },
+        "bio": { "type": "string", "description": "User biography" },
+        "skills": { "type": "array", "items": { "type": "string" } },
+        "portfolio": { "type": "array", "items": { "type": "string" } },
+        "pricing": { "type": "array", "items": { "type": "string" } },
+        "availability": { "type": "string", "enum": ["available", "busy", "offline"] },
+        "avatarUrl": { "type": "string" },
+        "website": { "type": "string" },
+        "verificationStatus": { "type": "string", "enum": ["none", "pending", "rejected", "approved"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "handle", "name", "role", "badge"]
+    },
+    "Handle": {
+      "title": "Handle",
+      "description": "Used to ensure handles are unique. Document ID is the handle.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" }
+      },
+      "required": ["uid"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "Chat session between users.",
+      "type": "object",
+      "properties": {
+        "participants": { "type": "array", "items": { "type": "string" } },
+        "lastMessage": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["participants"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A message within a chat.",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "text": { "type": "string" },
+        "isBlocked": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["senderId", "text", "createdAt"]
+    },
+    "FollowRelationship": {
+      "title": "FollowRelationship",
+      "description": "Represents a user following another user",
+      "type": "object",
+      "properties": {
+        "followerId": { "type": "string" },
+        "followingId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["followerId", "followingId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Stores user profiles."
+    },
+    "/handles/{handleId}": {
+      "schema": { "$ref": "#/entities/Handle" },
+      "description": "Registry of claimed handles. ID is the lowercase handle."
+    },
+    "/chats/{chatId}": {
+      "schema": { "$ref": "#/entities/Chat" },
+      "description": "Chat sessions."
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Messages inside a chat."
+    },
+    "/follows/{followId}": {
+      "schema": { "$ref": "#/entities/FollowRelationship" },
+      "description": "Follower to Following mapping tracking"
+    }
+  }
+}

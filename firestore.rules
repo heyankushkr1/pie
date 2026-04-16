@@ -1,0 +1,203 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: user UID
+    // Fields:
+    //   - uid: string (immutable)
+    //   - handle: string (unique)
+    //   - name: string
+    //   - role: string (admin, vice_admin, moderator, editor, client)
+    //   - badge: string (gold, silver, purple, blue, green, none)
+    //   - bio: string 
+    //   - skills: list of strings
+    //   - portfolio: list of strings
+    //   - pricing: list of strings
+    //   - availability: string (available, busy, offline)
+    //   - avatarUrl: string
+    //   - website: string
+    //   - verificationStatus: string (none, pending, rejected, approved)
+    //
+    // Collection: handles
+    // Document ID: lowercase handle
+    // Fields:
+    //   - uid: string
+    //
+    // Collection: chats
+    // Document ID: auto
+    // Fields:
+    //   - participants: list of strings
+    //   - lastMessage: string
+    //   - updatedAt: string
+    //
+    // Subcollection: messages (under chats)
+    // Document ID: auto
+    // Fields:
+    //   - senderId: string
+    //   - text: string
+    //   - isBlocked: boolean
+    //   - createdAt: string
+    //
+    // Collection: follows
+    // Document ID: auto
+    // Fields:
+    //   - followerId: string
+    //   - followingId: string
+    //   - createdAt: string
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+        (request.auth.token.email == "nkshrajwar@gmail.com" && request.auth.token.email_verified == true)
+      );
+    }
+    
+    function isViceAdmin() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'vice_admin';
+    }
+
+    function isModerator() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'moderator';
+    }
+
+    function isStaff() {
+      return isAdmin() || isViceAdmin() || isModerator();
+    }
+
+    // Role & Badge Logic
+    function canAssignRoleAndBadge(newRole, newBadge, oldRole, oldBadge) {
+      // If role/badge isn't changing, it's allowed
+      let unchanged = newRole == oldRole && newBadge == oldBadge;
+      // Admins can set any role and badge
+      let adminAllowed = isAdmin();
+      // Vice admins can set badges/roles up to a certain level, let's just let them do it like admins for now
+      let viceAdminAllowed = isViceAdmin();
+      return unchanged || adminAllowed || viceAdminAllowed;
+    }
+
+    function isValidUserCreate(data, userId) {
+      let validRole = data.role in ['admin', 'vice_admin', 'moderator', 'editor', 'client'];
+      let validBadge = data.badge in ['gold', 'silver', 'purple', 'blue', 'green', 'none'];
+      
+      // Bootstrap admin can create an admin profile.
+      // Everyone else defaults to none badge and editor/client role
+      return 
+        data.keys().hasAll(['uid', 'handle', 'name', 'role', 'badge']) &&
+        data.uid == userId &&
+        data.name is string && data.name.size() > 0 && data.name.size() <= 60 &&
+        data.handle is string && data.handle.size() > 0 && data.handle.size() <= 30 &&
+        (!(data.keys().hasAny(['verificationStatus'])) || data.verificationStatus == 'none') &&
+        validRole && validBadge &&
+        (isAdmin() || (data.role in ['editor', 'client'] && data.badge == 'none'));
+    }
+
+    function isValidUserUpdate(data, oldData, userId) {
+      let roleUnchanged = data.role == oldData.role || isAdmin() || isViceAdmin();
+      let badgeUnchanged = data.badge == oldData.badge || isAdmin() || isViceAdmin();
+      let verStatOk = (!('verificationStatus' in data)) || 
+                      (data.verificationStatus == oldData.verificationStatus) || 
+                      (isOwner(userId) && data.verificationStatus == 'pending') || 
+                      isStaff();
+
+      return 
+        data.uid == oldData.uid &&
+        data.name is string && data.name.size() > 0 && data.name.size() <= 60 &&
+        data.handle is string && data.handle.size() > 0 && data.handle.size() <= 30 &&
+        verStatOk && roleUnchanged && badgeUnchanged;
+    }
+
+    // Ensure list sizes
+    function isValidList(list, maxSize) {
+      return !(list in request.resource.data) || (request.resource.data[list] is list && request.resource.data[list].size() <= maxSize);
+    }
+    
+    function isValidOptionalString(field, maxLen) {
+      return !(field in request.resource.data) || (request.resource.data[field] is string && request.resource.data[field].size() <= maxLen);
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isAuthenticated(); // For marketplace search
+      
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUserCreate(request.resource.data, userId);
+      
+      allow update: if isAuthenticated() && 
+                    (isOwner(userId) || isStaff()) && 
+                    isValidUserUpdate(request.resource.data, resource.data, userId) &&
+                    isValidList('skills', 20) &&
+                    isValidList('portfolio', 50) &&
+                    isValidList('pricing', 10) &&
+                    isValidOptionalString('bio', 1000) &&
+                    isValidOptionalString('avatarUrl', 200000) && // Allow base64 potentially
+                    isValidOptionalString('website', 500) &&
+                    isValidOptionalString('createdAt', 50);
+                    
+      allow delete: if isAdmin();
+    }
+
+    // Handles logic: must match the uid requesting it
+    match /handles/{handleId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && 
+        request.resource.data.keys().hasAll(['uid']) && 
+        request.resource.data.uid == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.uid == request.auth.uid;
+    }
+
+    // Chats Collection
+    match /chats/{chatId} {
+      allow read: if isAuthenticated() && (request.auth.uid in resource.data.participants || isStaff());
+      allow create: if isAuthenticated() && 
+                    request.resource.data.keys().hasAll(['participants']) &&
+                    request.auth.uid in request.resource.data.participants &&
+                    request.resource.data.participants is list &&
+                    request.resource.data.participants.size() == 2;
+      allow update: if isAuthenticated() && (request.auth.uid in resource.data.participants || isStaff());
+    }
+
+    // Messages Subcollection
+    match /chats/{chatId}/messages/{messageId} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants || isStaff()
+      );
+      
+      allow create: if isAuthenticated() && 
+                    request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
+                    request.resource.data.keys().hasAll(['senderId', 'text', 'createdAt']) &&
+                    request.resource.data.senderId == request.auth.uid &&
+                    request.resource.data.text is string && request.resource.data.text.size() <= 2000 &&
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['senderId', 'text', 'createdAt', 'isBlocked']);
+                    
+      allow update: if isStaff();
+    }
+
+    // Follows Collection
+    match /follows/{followId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && 
+                    request.resource.data.keys().hasAll(['followerId', 'followingId', 'createdAt']) &&
+                    request.resource.data.followerId == request.auth.uid &&
+                    request.resource.data.followingId is string &&
+                    followId == request.auth.uid + '_' + request.resource.data.followingId;
+      allow delete: if isAuthenticated() && resource.data.followerId == request.auth.uid;
+    }
+  }
+}
